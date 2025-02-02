@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Music Panes (Perfect Fifth Detection)</title>
+  <title>Music Panes (Editable Frequency & Perfect Fifth Detection)</title>
   <style>
     /* Full-window canvas with no margins */
     html, body {
@@ -11,7 +11,7 @@
       overflow: hidden;
       background-color: black;
     }
-    /* Place the canvas above the instructions */
+    /* Ensure the canvas is above the instructions */
     canvas {
       display: block;
       position: relative;
@@ -32,7 +32,7 @@
     /* Styling for the slider */
     .hue-slider {
       position: absolute;
-      z-index: 200;  /* ensure slider is above everything */
+      z-index: 200;
       -webkit-appearance: none;
       appearance: none;
       width: 100%;
@@ -59,33 +59,44 @@
       border-radius: 50%;
       cursor: pointer;
     }
+    /* Frequency input styling */
+    #freqInput {
+      position: absolute;
+      z-index: 300;
+      font-size: 16px;
+      padding: 2px;
+      border: 2px solid #888;
+      border-radius: 4px;
+      text-align: center;
+      width: 80px;
+    }
   </style>
 </head>
 <body>
   <div id="info">
-    <p><strong>Music Panes (Perfect Fifth Detection)</strong></p>
+    <p><strong>Music Panes (Editable Frequency & Perfect Fifth Detection)</strong></p>
     <p>
       • Drag a pane to move it.<br>
       • Drag its lower‑right corner to resize it.<br>
       • Double‑click on empty space to add a new pane.<br>
       • Double‑click on a pane to toggle its slider.<br>
-      • Right‑click on a pane to delete it.
+      • Right‑click on a pane to delete it.<br>
+      • Use Tab/Shift‑Tab to cycle between panes and edit their frequency.
     </p>
     <p>
-      Each pane is assigned a random dark-to-light mapping preset (e.g. blue→yellow, red→yellow, purple→orange, or green→yellow).<br>
-      The slider (with a range of 0–800 and step 0.1) controls both the lightness (L) and hue (H) so that frequency changes are very fine‑grained (≤1 Hz per step).<br>
-      A white line is drawn between two panes whose frequencies are a perfect fifth apart (ratio ≈1.5).
+      A white line is drawn between any two panes whose frequencies are within 0.005 of a perfect fifth (ratio ≈1.5).
     </p>
     <p>(Click anywhere to start audio.)</p>
   </div>
   <canvas id="canvas"></canvas>
+  <!-- Global frequency input (hidden by default) -->
+  <input type="text" id="freqInput" style="display:none;">
   <script>
+    // ----- Perfect Fifth Tolerance -----
+    const perfectFifthRatio = 1.5;
+    const tolerance = 0.005; // stricter tolerance
+
     // ----- Mapping Presets -----
-    // Each preset defines low and high values for L and H.
-    // The slider (0–800) maps as:
-    //    L = L_low + (x/800)*(L_high - L_low)
-    //    H = H_low + (x/800)*(H_high - H_low)
-    // Frequency is computed solely from L: frequency = 200 + (L/100)*800.
     const mappingPresets = [
       { L_low: 20, L_high: 80, H_low: 240, H_high: 60 },   // Blue → Yellow
       { L_low: 20, L_high: 80, H_low: 0,   H_high: 60 },    // Red → Yellow
@@ -95,7 +106,7 @@
     function randomMapping() {
       return mappingPresets[Math.floor(Math.random() * mappingPresets.length)];
     }
-    const sliderRange = 800;  // Slider goes from 0 to 800.
+    const sliderRange = 800;  // Slider goes from 0 to 800, step 0.1
 
     // ----- Canvas Setup -----
     const canvas = document.getElementById('canvas');
@@ -112,11 +123,10 @@
     const audioCtx = new AudioContext();
 
     // ----- Color Helpers -----
-    // Convert an HSL object (with h in degrees, s and l in percentages) to a CSS string.
     function hslToCSS(hsl) {
       return `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`;
     }
-    // Frequency is determined solely by L via: frequency = 200 + (L/100)*800.
+    // Frequency from L: frequency = 200 + (L/100)*800.
     function getFrequencyFromL(L) {
       return 200 + (L / 100) * 800;
     }
@@ -130,27 +140,22 @@
     let resizeOffsetX = 0, resizeOffsetY = 0;
     const resizeMargin = 10;
 
-    // Utility: Generate a random number between min and max.
-    function randomRange(min, max) {
-      return min + Math.random() * (max - min);
-    }
+    // For tab navigation, assign each pane an id.
+    let paneIdCounter = 0;
 
     // ----- Pane Class -----
-    // The constructor takes a mapping preset and an initial slider value.
     function Pane(x, y, width, height, mapping, sliderValue) {
+      this.id = paneIdCounter++;
       this.x = x;
       this.y = y;
       this.width = width;
       this.height = height;
       this.mapping = mapping;
-      // Compute initial L and H from the slider value.
       let L = mapping.L_low + (sliderValue / sliderRange) * (mapping.L_high - mapping.L_low);
       let H = mapping.H_low + (sliderValue / sliderRange) * (mapping.H_high - mapping.H_low);
       this.hsl = { h: H, s: 100, l: L };
       this.alpha = 0.5;
-      // Base frequency is determined solely by L.
       this.baseFrequency = getFrequencyFromL(L);
-      // Create oscillator and gain node.
       this.oscillator = audioCtx.createOscillator();
       this.gainNode = audioCtx.createGain();
       this.oscillator.type = 'sine';
@@ -159,7 +164,6 @@
       this.oscillator.connect(this.gainNode);
       this.gainNode.connect(audioCtx.destination);
       this.oscillator.start();
-      // Reference to an active slider element.
       this.slider = null;
     }
 
@@ -167,7 +171,6 @@
       ctx.fillStyle = hslToCSS(this.hsl);
       ctx.globalAlpha = this.alpha;
       ctx.fillRect(this.x, this.y, this.width, this.height);
-      // Draw the current (smoothed) frequency as text.
       ctx.fillStyle = "white";
       ctx.font = "16px sans-serif";
       let freq = this.oscillator.frequency.value;
@@ -181,7 +184,9 @@
 
     // ----- Initial Panes -----
     function initPanes() {
-      // Create 3 panes with random sizes and positions.
+      function randomRange(min, max) {
+        return min + Math.random() * (max - min);
+      }
       for (let i = 0; i < 3; i++) {
         let width = randomRange(100, 300);
         let height = randomRange(100, 300);
@@ -194,11 +199,90 @@
     }
     initPanes();
 
-    // ----- Mouse Interaction -----
-    canvas.addEventListener('mousedown', (e) => {
-      if (audioCtx.state === 'suspended') {
-        audioCtx.resume();
+    // ----- Frequency Input for Editing -----
+    const freqInput = document.getElementById('freqInput');
+    let editingPane = null;  // the pane currently being edited
+
+    function startEditing(pane) {
+      editingPane = pane;
+      freqInput.value = pane.oscillator.frequency.value.toFixed(2);
+      freqInput.style.display = 'block';
+      // Position the input at (pane.x+5, pane.y+5)
+      freqInput.style.left = (pane.x + 5) + "px";
+      freqInput.style.top = (pane.y + 5) + "px";
+      freqInput.focus();
+      freqInput.select();
+    }
+
+    function commitEditing() {
+      if (editingPane) {
+        let newFreq = parseFloat(freqInput.value);
+        if (!isNaN(newFreq)) {
+          // Compute new L from frequency:
+          // newFreq = 200 + (L/100)*800  →  L = ((newFreq - 200) / 800) * 100.
+          let newL = ((newFreq - 200) / 800) * 100;
+          // Clamp L to a reasonable range (e.g., 0 to 100).
+          newL = Math.max(0, Math.min(100, newL));
+          editingPane.hsl.l = newL;
+          editingPane.baseFrequency = getFrequencyFromL(newL);
+          // If a slider is active for this pane, update its value.
+          if (editingPane.slider) {
+            let xVal = ((editingPane.hsl.l - editingPane.mapping.L_low) / (editingPane.mapping.L_high - editingPane.mapping.L_low)) * sliderRange;
+            editingPane.slider.value = xVal;
+          }
+        }
+        freqInput.style.display = 'none';
+        editingPane = null;
       }
+    }
+
+    // ----- Tab Navigation for Editing -----
+    // Cycle through panes (sorted by id) when Tab or Shift+Tab is pressed.
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && editingPane) {
+        commitEditing();
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        if (!editingPane) {
+          // No pane is being edited; start with the pane with the lowest id.
+          let sorted = panes.slice().sort((a, b) => a.id - b.id);
+          if (sorted.length > 0) {
+            startEditing(sorted[0]);
+          }
+        } else {
+          // Commit current editing and move to next (or previous if Shift pressed).
+          let sorted = panes.slice().sort((a, b) => a.id - b.id);
+          let idx = sorted.findIndex(p => p.id === editingPane.id);
+          commitEditing();
+          if (e.shiftKey) {
+            idx = (idx - 1 + sorted.length) % sorted.length;
+          } else {
+            idx = (idx + 1) % sorted.length;
+          }
+          startEditing(sorted[idx]);
+        }
+      }
+    });
+
+    // Optionally, allow clicking on a pane’s frequency text area to edit it.
+    canvas.addEventListener('click', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      // Check if the click is within any pane’s frequency text region (approx. top-left 100x30)
+      for (let i = panes.length - 1; i >= 0; i--) {
+        let pane = panes[i];
+        if (mouseX >= pane.x + 5 && mouseX <= pane.x + 105 &&
+            mouseY >= pane.y + 5 && mouseY <= pane.y + 30) {
+          startEditing(pane);
+          break;
+        }
+      }
+    });
+
+    // ----- Mouse Interaction for Drag/Resize (as before) -----
+    canvas.addEventListener('mousedown', (e) => {
+      if (audioCtx.state === 'suspended') { audioCtx.resume(); }
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
@@ -217,7 +301,6 @@
             dragOffsetX = mouseX - pane.x;
             dragOffsetY = mouseY - pane.y;
           }
-          // Bring the pane to the front.
           panes.splice(i, 1);
           panes.push(pane);
           return;
@@ -247,6 +330,7 @@
       resizing = false;
     });
 
+    // ----- Double-click Behavior (for slider toggling / new pane creation) -----
     canvas.addEventListener('dblclick', (e) => {
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
@@ -262,6 +346,9 @@
       if (clickedPane) {
         toggleHueSlider(clickedPane);
       } else {
+        function randomRange(min, max) {
+          return min + Math.random() * (max - min);
+        }
         let width = randomRange(100, 300);
         let height = randomRange(100, 300);
         let x = Math.min(mouseX - width/2, canvas.width - width);
@@ -272,6 +359,7 @@
       }
     });
 
+    // ----- Right-click to Delete -----
     canvas.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
@@ -293,7 +381,7 @@
     });
 
     // ----- Hue Slider Toggling -----
-    // The slider (range 0–800, step 0.1) controls a composite parameter "x" that maps to:
+    // The slider (range 0–800, step 0.1) controls a composite parameter x mapping to:
     //    L = mapping.L_low + (x/800)*(mapping.L_high - mapping.L_low)
     //    H = mapping.H_low + (x/800)*(mapping.H_high - mapping.H_low)
     function toggleHueSlider(pane) {
@@ -305,7 +393,7 @@
         slider.type = 'range';
         slider.min = 0;
         slider.max = sliderRange;
-        slider.step = 0.1; // Allow decimal adjustments.
+        slider.step = 0.1;
         let xVal = ((pane.hsl.l - pane.mapping.L_low) / (pane.mapping.L_high - pane.mapping.L_low)) * sliderRange;
         slider.value = xVal;
         slider.className = 'hue-slider';
@@ -325,12 +413,7 @@
       }
     }
 
-    // ----- Perfect Fifth Detection -----
-    // We define a perfect fifth as a frequency ratio of 1.5 (within a tolerance).
-    const perfectFifthRatio = 1.5;
-    const tolerance = 0.002;
-
-    // ----- Animation & Audio Update with Frequency Smoothing -----
+    // ----- Animation & Audio Update with Frequency Smoothing & Perfect Fifth Detection -----
     function animate() {
       requestAnimationFrame(animate);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -339,8 +422,8 @@
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.globalCompositeOperation = 'lighter';
       const currentTime = audioCtx.currentTime;
-      const modRate = 5;           // vibrato frequency (Hz)
-      const modDepthFactor = 0.1;  // vibrato depth
+      const modRate = 5;
+      const modDepthFactor = 0.1;
       for (let i = 0; i < panes.length; i++) {
         let pane = panes[i];
         let totalOverlap = 0;
@@ -379,7 +462,7 @@
           pane.slider.style.width = pane.width + "px";
         }
       }
-      // Perfect Fifth Detection:
+      // ----- Perfect Fifth Detection -----
       for (let i = 0; i < panes.length; i++) {
         for (let j = i + 1; j < panes.length; j++) {
           let f1 = panes[i].oscillator.frequency.value;
@@ -387,7 +470,6 @@
           let lower = Math.min(f1, f2);
           let higher = Math.max(f1, f2);
           let ratio = higher / lower;
-          console.log(ratio);
           if (Math.abs(ratio - perfectFifthRatio) < tolerance) {
             // Draw a white line between the centers of the two panes.
             let x1 = panes[i].x + panes[i].width / 2;
